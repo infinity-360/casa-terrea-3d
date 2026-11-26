@@ -47,6 +47,7 @@ html,body{height:100%;overflow:hidden;background:#c9d9e3;color:var(--ink);font-f
 button{font:600 13px/1 var(--f-display);border-radius:10px;padding:11px 14px;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
 button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.5;cursor:progress}
 #hint{position:fixed;z-index:5;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 14px);padding:9px 14px;font-size:12.5px;color:var(--muted);white-space:nowrap;max-width:calc(100vw - 28px);overflow:hidden;text-overflow:ellipsis}
 #cross{position:fixed;z-index:4;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:rgba(255,255,255,.9);box-shadow:0 0 0 1px rgba(0,0,0,.35)}
 #stick{position:fixed;z-index:5;left:calc(env(safe-area-inset-left,0px) + 18px);bottom:calc(env(safe-area-inset-bottom,0px) + 250px);width:116px;height:116px;border-radius:50%;background:rgba(250,248,243,.32);border:1px solid rgba(255,255,255,.7);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);touch-action:none;user-select:none;-webkit-user-select:none}
@@ -138,12 +139,13 @@ button.link{justify-self:start;background:none;border:0;padding:4px 0;color:var(
     </ul>
     <p class="specs">Faça o tour guiado pelos 12 ambientes ou explore sozinho. Troque o estilo da decoração e veja a casa de manhã, ao pôr do sol e à noite.</p>
     <div class="row">
-      <button id="btnTourIntro" type="button" class="primary">Começar</button>
-      <button id="btnStart" type="button">Explorar sozinho</button>
-      <button id="btnTopIntro" type="button">Ver de cima</button>
+      <button id="btnTourIntro" type="button" class="primary" disabled>Começar</button>
+      <button id="btnStart" type="button" disabled>Explorar sozinho</button>
+      <button id="btnTopIntro" type="button" disabled>Ver de cima</button>
     </div>
     <button id="btnContactIntro" type="button" class="link">Falar com <span class="cName"></span></button>
-    <p class="note">Imagens ilustrativas. Medidas aproximadas, pé-direito de 2,80 m.</p>
+    <p class="note" id="loadNote" aria-live="polite">Carregando móveis, carros e texturas…</p>
+    <p class="note">Imagens ilustrativas. Medidas aproximadas, pé-direito de 2,80 m.<br>Modelos 3D: Ferrari 458 por vicent091036 e sofá Glam Velvet por Eric Chadwick (CC BY 4.0); demais modelos, texturas e céu: Poly Haven e Khronos (CC0).</p>
   </div>
 </div>
 
@@ -163,8 +165,10 @@ button.link{justify-self:start;background:none;border:0;padding:4px 0;color:var(
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
 <script>
-(() => {
+(async () => {
 const H = 2.8, T = 0.15, LOT_W = 14.06, LOT_D = 27;
 const isTouch = matchMedia('(pointer: coarse)').matches;
 
@@ -185,8 +189,32 @@ scene.background = new THREE.Color('#bcd4e4').convertSRGBToLinear();
 scene.fog = new THREE.Fog(scene.background, 45, 110);
 const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 250);
 camera.rotation.order = 'YXZ';
+let sky = null;
 
-// ---------- procedural textures (no image files) ----------
+// ---------- real assets: photo textures, sky photo, 3D models (assets/, see README for credits) ----------
+const texLoader = new THREE.TextureLoader();
+const loadTex = (file, meters) => new Promise(ok => texLoader.load('assets/' + file, t => {
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.encoding = THREE.sRGBEncoding;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy(); t.userData = { m: meters }; ok(t);
+}, undefined, () => ok(null))); // a missing file falls back to the drawn texture
+const gltfLoader = new THREE.GLTFLoader();
+const draco = new THREE.DRACOLoader(); draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/draco/gltf/');
+gltfLoader.setDRACOLoader(draco);
+const loadModel = file => new Promise(ok => gltfLoader.load('assets/models/' + file, g => ok(g.scene), undefined, e => { console.warn(file, e); ok(null); }));
+const PHOTO = { marble: ['marble_01', 1.5], wood: ['laminate_floor_02', 1.7], oak: ['herringbone_parquet', 3.4], walnut: ['wood_floor', 1.7],
+  travertine: ['patio_tiles', 2.15], tile: ['long_white_tiles', 1.27], tileDark: ['granite_tile', 2.3], paver: ['wood_floor_deck', 1.8],
+  grass: ['leafy_grass', 2.0], concrete: ['smooth_concrete_floor', 2.0] };
+const MODEL_FILES = { sofa: 'GlamVelvetSofa.glb', armchair: 'SheenChair.glb', chair: 'dining_chair_02/dining_chair_02.gltf',
+  coffee: 'modern_coffee_table_01/modern_coffee_table_01.gltf', plantTall: 'potted_plant_01/potted_plant_01.gltf',
+  plant: 'potted_plant_02/potted_plant_02.gltf', succulent: 'potted_plant_04/potted_plant_04.gltf', car: 'ferrari.glb' };
+const [photoList, skyTex, carShadow, modelList] = await Promise.all([
+  Promise.all(Object.values(PHOTO).map(([f, m]) => loadTex('tex/' + f + '.jpg', m))),
+  loadTex('tex/sky.jpg', 1), loadTex('models/ferrari_ao.png', 1),
+  Promise.all(Object.values(MODEL_FILES).map(loadModel)),
+]);
+const MODELS = {}; Object.keys(MODEL_FILES).forEach((k, i) => { MODELS[k] = modelList[i]; });
+
+// ---------- procedural textures (fallbacks, art, water) ----------
 const rnd = (a, b) => a + Math.random() * (b - a);
 function makeTex(size, meters, draw) {
   const c = document.createElement('canvas'); c.width = c.height = size;
@@ -313,6 +341,8 @@ function artTex(p, v) {
   t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
   return t;
 }
+TX.marbleTop = TX.marble; // countertops keep the white drawn marble; the floor gets the photo
+Object.keys(PHOTO).forEach((k, i) => { if (photoList[i]) TX[k] = photoList[i]; });
 const ART = {};
 for (const k in ART_PAL) ART[k] = [0, 1, 2, 3, 4, 5].map(v => artTex(ART_PAL[k], v));
 
@@ -320,6 +350,12 @@ function texFor(name, w, d) {
   const t = TX[name].clone(); t.needsUpdate = true;
   t.repeat.set(w / TX[name].userData.m, d / TX[name].userData.m);
   return t;
+}
+
+if (skyTex) {
+  skyTex.wrapS = THREE.RepeatWrapping;
+  sky = new THREE.Mesh(new THREE.SphereGeometry(200, 48, 24), new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, fog: false, depthWrite: false }));
+  sky.renderOrder = -1; scene.add(sky);
 }
 
 // ---------- materials ----------
@@ -380,6 +416,13 @@ const M = {
   umbrella: mat('#f1ede4', { roughness: 1, side: THREE.DoubleSide }),
 };
 const TV_ON = mat('#101214', { roughness: .15, metalness: .3 });
+M.armFab = mat('#c9b8a3', { roughness: 1 });
+// the real sofa and armchairs take their fabric colour from the decor style
+const restyle = (key, test, k) => MODELS[key] && MODELS[key].traverse(o => {
+  if (!o.isMesh || !test.test(o.material.name)) return;
+  o.material.map = null; o.material.color.copy(M[k].color); o.material.needsUpdate = true; M[k] = o.material;
+});
+restyle('sofa', /fabric/, 'green'); restyle('armchair', /fabric/, 'armFab');
 
 // ---------- helpers ----------
 const cols = []; // walk collision rectangles [x0,z0,x1,z1]
@@ -453,6 +496,7 @@ function wall(x1, z1, x2, z2, ops = [], h = H, m = M.wall) {
 
 // ---------- ground & floors ----------
 const outer = (x0, z0, x1, z1, m, y = -0.01) => {
+  if (m === M.outside) m = mat('#c9d4bf', { map: texFor('grass', x1 - x0, z1 - z0), roughness: 1 });
   const me = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), m);
   me.rotation.x = -Math.PI / 2; me.position.set((x0 + x1) / 2, y, (z0 + z1) / 2); me.receiveShadow = true; scene.add(me);
 };
@@ -508,13 +552,27 @@ wall(3.55, 0, LOT_W, 0, [], 2.2, M.muro); wall(LOT_W, 0, LOT_W, LOT_D, [], 2.2, 
 blk(.05, LOT_D - .3, .3, LOT_D - .05, 0, H, M.wall, { col: true }); blk(7.9, LOT_D - .3, 8.15, LOT_D - .05, 0, H, M.wall, { col: true });
 
 // ---------- furniture builders ----------
+// place a loaded 3D model: footprint centred on (x,z), resting on y, scaled to width w or height h (real-world size otherwise)
+function model(key, x, z, rot, { w, h, y = 0 } = {}) {
+  if (!MODELS[key]) return null;
+  const o = MODELS[key].clone(true);
+  const box = new THREE.Box3().setFromObject(o), size = box.getSize(new THREE.Vector3());
+  const k = w ? w / size.x : h ? h / size.y : 1;
+  o.scale.multiplyScalar(k);
+  o.position.set(-(box.min.x + box.max.x) / 2 * k, -box.min.y * k, -(box.min.z + box.max.z) / 2 * k);
+  o.traverse(m => { if (m.isMesh) { m.castShadow = m.receiveShadow = true; m.material.userData.real = true; } });
+  const g = grp(x, z, rot, y); g.add(o);
+  return g;
+}
 function chair(x, z, rot) {
+  if (model('chair', x, z, rot)) return;
   const g = grp(x, z, rot);
   blk(-.22, -.22, .22, .22, .43, .49, M.cream, { parent: g });
   blk(-.22, -.25, .22, -.19, .49, .92, M.cream, { parent: g });
   for (const [a, b] of [[-.19, -.19], [.17, -.19], [-.19, .17], [.17, .17]]) blk(a, b, a + .03, b + .03, 0, .43, M.black, { parent: g });
 }
 function armchair(x, z, rot) {
+  if (model('armchair', x, z, rot, { w: .8 })) return;
   const g = grp(x, z, rot);
   blk(-.38, -.36, .38, .38, .05, .42, M.cream, { parent: g });
   blk(-.38, -.38, .38, -.18, .42, .8, M.cream, { parent: g });
@@ -561,10 +619,12 @@ function vanity(x, z, rot, w) {
 }
 function wardrobe(x0, z0, x1, z1) { blk(x0, z0, x1, z1, 0, 2.4, M.woodLight, { col: true }); }
 function plant(x, z, s = 1, y0 = 0) {
+  if (model(s < .6 ? 'succulent' : 'plant', x, z, rnd(0, 6), { h: 1.2 * s, y: y0 })) return;
   cyl(.18 * s, .14 * s, .42 * s, x, y0 + .21 * s, z, M.pot);
   ball(.32 * s, x, y0 + .72 * s, z, M.leaf, scene, 1.3); ball(.22 * s, x + .12 * s, y0 + .98 * s, z - .05 * s, M.leaf2);
 }
 function tallPlant(x, z) {
+  if (model('plantTall', x, z, rnd(0, 6), { h: 1.7 })) return;
   cyl(.22, .17, .45, x, .225, z, M.potDark); cyl(.02, .025, 1.4, x, 1.0, z, M.trunk);
   ball(.32, x + .05, 1.05, z, M.leaf); ball(.28, x - .08, 1.45, z + .05, M.leaf2); ball(.24, x + .04, 1.8, z - .04, M.leaf);
 }
@@ -583,16 +643,31 @@ function palm(x, z, h) {
   }
 }
 function tree(x, z, s) {
+  if (model('plantTall', x, z, rnd(0, 6), { h: 3.2 * s })) return;
   cyl(.12 * s, .18 * s, 2.2 * s, x, 1.1 * s, z, M.trunk);
   ball(1.1 * s, x, 2.7 * s, z, M.leaf); ball(.8 * s, x + .7 * s, 2.4 * s, z + .3 * s, M.leaf2); ball(.75 * s, x - .6 * s, 2.5 * s, z - .4 * s, M.leaf2);
 }
+const CAR_PAINT = new Map();
 function car(x, z, paint) {
+  addCol(x - .92, z - 2.25, x + .92, z + 2.25);
+  const real = model('car', x, z, 0, { w: 1.95 });
+  if (real) {
+    if (!CAR_PAINT.has(paint)) CAR_PAINT.set(paint, new THREE.MeshPhysicalMaterial({ color: paint.color, metalness: .9, roughness: .4, clearcoat: 1, clearcoatRoughness: .05 }));
+    const set = (n, m) => { const o = real.getObjectByName(n); if (o) o.material = m; };
+    set('body', CAR_PAINT.get(paint));
+    for (const n of ['rim_fl', 'rim_fr', 'rim_rl', 'rim_rr', 'trim']) set(n, M.steel);
+    set('glass', M.tint);
+    if (carShadow) {
+      const sh = new THREE.Mesh(new THREE.PlaneGeometry(.655 * 4, 1.3 * 4), new THREE.MeshBasicMaterial({ map: carShadow, blending: THREE.MultiplyBlending, toneMapped: false, transparent: true }));
+      sh.rotation.x = -Math.PI / 2; sh.position.y = .01; sh.renderOrder = 2; real.add(sh);
+    }
+    return;
+  }
   const g = grp(x, z, 0);
   blk(-.92, -2.25, .92, 2.25, .3, .92, paint, { parent: g });
   blk(-.8, -1.15, .8, .95, .92, 1.42, M.tint, { parent: g });
   blk(-.78, -.9, .78, .7, 1.42, 1.45, paint, { parent: g });
   for (const [a, b] of [[-.86, -1.45], [.86, -1.45], [-.86, 1.45], [.86, 1.45]]) { const w = cyl(.33, .33, .24, a, .33, b, M.tyre, g); w.rotation.z = Math.PI / 2; }
-  addCol(x - .92, z - 2.25, x + .92, z + 2.25);
 }
 
 // ---------- kitchen + dining ----------
@@ -629,8 +704,10 @@ blk(1.83, 15.6, 1.9, 18.5, 0, 2.6, M.wood); // slatted TV wall
 for (let z = 15.65; z < 18.5; z += .12) blk(1.9, z, 1.94, z + .05, 0, 2.6, M.woodDark, { cast: false });
 blk(1.94, 16.3, 1.99, 17.9, 1.1, 1.95, TV_ON);
 blk(1.95, 15.8, 2.4, 18.3, .2, .6, M.woodDark, { col: true });
-sofa(5.4, 17.05, -Math.PI / 2, 2.8, .95, M.green, true); addCol(4.92, 15.65, 5.88, 18.45);
-blk(3.3, 16.5, 4.1, 17.6, 0, .38, M.stone, { col: true });
+if (!model('sofa', 5.4, 17.05, -Math.PI / 2, { w: 2.6 })) sofa(5.4, 17.05, -Math.PI / 2, 2.8, .95, M.green, true);
+addCol(4.92, 15.65, 5.88, 18.45);
+if (model('coffee', 3.7, 17.05, 0, { w: .6 })) addCol(3.4, 16.5, 4.0, 17.6);
+else blk(3.3, 16.5, 4.1, 17.6, 0, .38, M.stone, { col: true });
 plant(3.75, 17.3, .3, .38);
 armchair(3.25, 15.0, 0); armchair(4.15, 15.0, 0); armchair(3.25, 19.15, Math.PI); armchair(4.15, 19.15, Math.PI);
 plant(2.15, 14.7, .9); plant(6.35, 19.45, .8);
@@ -696,7 +773,7 @@ for (const z of [2.6, 3.7]) { const g = grp(6.0, z, Math.PI / 2, -.25); blk(-.3,
 cyl(.18, .18, .4, 6.6, -.05, 3.15, M.woodLight);
 sofa(6.8, 5.8, Math.PI, 3.0, .85, M.cream); addCol(5.3, 5.38, 8.3, 6.22);
 blk(8.7, 5.35, 12.5, 6.05, 0, .35, M.potDark, { col: true });
-for (let x = 9.0; x < 12.4; x += .55) ball(rnd(.28, .4), x, .55, 5.7, x % 1.1 < .55 ? M.leaf : M.leaf2);
+for (let x = 9.0; x < 12.4; x += .55) if (!model('plant', x, 5.7, rnd(0, 6), { h: .85, y: .05 })) ball(rnd(.28, .4), x, .55, 5.7, x % 1.1 < .55 ? M.leaf : M.leaf2);
 cyl(.03, .03, 2.4, 12.95, 1.2, 4.3, M.steel);
 const umb = new THREE.Mesh(new THREE.ConeGeometry(1.4, .5, 10, 1, true), M.umbrella); umb.position.set(12.95, 2.45, 4.3); umb.castShadow = true; scene.add(umb);
 tree(4.6, .7, .9); palm(13.3, .9, 5.5); palm(13.2, 25.8, 5);
@@ -707,7 +784,7 @@ blk(13.75, .2, 13.98, LOT_D - .2, 0, 1.9, M.hedge, { cast: false });
 blk(.08, 14.35, .32, 21.15, 0, 1.6, M.hedge);
 for (let z = 7.9; z < 23; z += 1.2) blk(12.95, z, 13.55, z + .7, 0, .03, M.paverM, { cast: false });
 for (let z = 14.6; z < 20.8; z += 1.0) blk(.6, z, 1.3, z + .6, 0, .03, M.paverM, { cast: false }); // stepping stones, left garden
-for (const x of [9.0, 10.3, 11.6]) ball(.45, x, .35, 24.5, M.leaf2);
+for (const x of [9.0, 10.3, 11.6]) if (!model('plant', x, 24.5, rnd(0, 6), { h: 1.1, y: -.3 })) ball(.45, x, .35, 24.5, M.leaf2);
 
 // garage
 car(1.8, 24.1, M.paint1); car(4.3, 24.1, M.paint2);
@@ -839,7 +916,7 @@ const DAY = [
   [22, '#ff7a3c', 0, '#0d1324', '#2a3655', .07, 1, 1.0],
 ];
 const DAYC = DAY.map(k => [k[0], col(k[1]), k[2], col(k[3]), col(k[4]), k[5], k[6], k[7]]);
-const _a = new THREE.Color(), ground = col('#6f6a5c');
+const _a = new THREE.Color(), WHITE = new THREE.Color(1, 1, 1), ground = col('#6f6a5c');
 let styleExp = 1, timeExp = 1, lastEnvHour = -99;
 function applyTime(h) {
   let i = 0; while (i < DAYC.length - 2 && h > DAYC[i + 1][0]) i++;
@@ -862,6 +939,7 @@ function applyTime(h) {
   M.downlight.emissiveIntensity = .15 + lamp * 2.6;
   poolLight.intensity = lamp * 1.6; garageLight.intensity = lamp * .9;
   M.water.emissive.copy(col('#1a8fb5')).multiplyScalar(lamp * .9);
+  if (sky) { _a.copy(sun.color).lerp(WHITE, .5); sky.material.color.copy(scene.background).lerp(_a, Math.min(1, sun.intensity / 1.6)); }
   if (Math.abs(h - lastEnvHour) > .2) {
     lastEnvHour = h;
     envUniforms.top.value.copy(scene.background).multiplyScalar(.85);
@@ -981,21 +1059,21 @@ setMode('walk');
 
 // ---------- decor styles ----------
 const STYLES = {
-  moderno: { label: 'Moderno', exposure: 1.0, wood: 'wood', stone: 'marble',
+  moderno: { label: 'Moderno', exposure: 1.0, wood: 'wood', stone: 'marbleTop',
     floor: { social: 'marble', bed: 'wood', bath: 'tile' },
-    colors: { wall: '#f2efe9', woodDark: '#5b4433', woodLight: '#c9a77f', green: '#4a6948', cream: '#e8e1d4', upholster: '#8b7a6a',
+    colors: { armFab: '#cbbba6', wall: '#f2efe9', woodDark: '#5b4433', woodLight: '#c9a77f', green: '#4a6948', cream: '#e8e1d4', upholster: '#8b7a6a',
       rug: '#cfc3b0', rugGrey: '#a9a39a', lacquer: '#f3f1ec', duvet1: '#c8b49c', duvet2: '#9fb2a8', duvet3: '#b9a48e',
       cushion: '#b5643c', throw: '#d9cbb5', curtain: '#ece7de', placemat: '#3a3836', runner: '#7d8c7a',
       metal: ['#1c1c1e', .3], artFrame: '#1c1c1e', pot: '#d6cfc4' } },
-  escandinavo: { label: 'Escandinavo', exposure: 1.06, wood: 'oak', stone: 'marble',
+  escandinavo: { label: 'Escandinavo', exposure: 1.06, wood: 'oak', stone: 'marbleTop',
     floor: { social: 'oak', bed: 'oak', bath: 'tile' },
-    colors: { wall: '#f7f6f2', woodDark: '#cdb390', woodLight: '#e2d0b6', green: '#c6c1b7', cream: '#f1ede5', upholster: '#bcb4a7',
+    colors: { armFab: '#dcd6cb', wall: '#f7f6f2', woodDark: '#cdb390', woodLight: '#e2d0b6', green: '#c6c1b7', cream: '#f1ede5', upholster: '#bcb4a7',
       rug: '#ebe6dc', rugGrey: '#d4d0c7', lacquer: '#f7f6f2', duvet1: '#ebe6dc', duvet2: '#b9c8bd', duvet3: '#c6d1da',
       cushion: '#9fb3a6', throw: '#d8c3a5', curtain: '#f6f3ee', placemat: '#d8c3a5', runner: '#e9e4da',
       metal: ['#2a2a2a', .2], artFrame: '#cdb390', pot: '#f1eee8' } },
   luxo: { label: 'Luxo aconchegante', exposure: .96, wood: 'walnut', stone: 'nero',
     floor: { social: 'travertine', bed: 'walnut', bath: 'travertine' },
-    colors: { wall: '#e6ddd0', woodDark: '#3b2a20', woodLight: '#6e5038', green: '#6b3f2a', cream: '#d8c6ab', upholster: '#5e4a3c',
+    colors: { armFab: '#8a5a3c', wall: '#e6ddd0', woodDark: '#3b2a20', woodLight: '#6e5038', green: '#6b3f2a', cream: '#d8c6ab', upholster: '#5e4a3c',
       rug: '#a88d6f', rugGrey: '#6f6258', lacquer: '#3b2a20', duvet1: '#a65a3f', duvet2: '#5f6b46', duvet3: '#34445a',
       cushion: '#b08d57', throw: '#7a3e2b', curtain: '#cbb79c', placemat: '#b08d57', runner: '#4a3a2e',
       metal: ['#b08d57', .85], artFrame: '#b08d57', pot: '#4a3f37' } },
@@ -1024,7 +1102,7 @@ document.querySelectorAll('#styles button').forEach(b => b.addEventListener('cli
 applyStyle('moderno');
 
 // reflections: strong on glass, gentle everywhere else
-scene.traverse(o => { if (o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity = o.material === M.glass ? 1.8 : o.material === M.mirror ? 1.5 : .22; });
+scene.traverse(o => { if (o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity = o.material === M.glass ? 1.8 : o.material === M.mirror ? 1.5 : o.material.userData.real ? .6 : .22; });
 M.glass.opacity = .28; M.glass.metalness = .5;
 
 // ---------- time of day control ----------
@@ -1274,10 +1352,13 @@ function tick() {
     camera.position.set(tx + r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi), tz + r * Math.sin(phi) * Math.cos(theta));
     camera.lookAt(tx, 0, tz);
   }
+  if (sky) sky.position.copy(camera.position);
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
 tick();
+for (const id of ['btnTourIntro', 'btnStart', 'btnTopIntro']) $(id).disabled = false;
+$('loadNote').hidden = true;
 
 // self-check: start point and every room label point must be walkable
 console.assert(!hit(player.x, player.z), 'start position is inside a collider');
